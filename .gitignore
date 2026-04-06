@@ -1,0 +1,8 @@
+node_modules/
+dist/
+build_log.txt
+.DS_Store
+Thumbs.db
+*.exe
+*.zip
+.agproj

@@ -1,0 +1,33 @@
+{
+  "name": "antigravity-video-editor",
+  "version": "1.0.0",
+  "description": "High-performance video editor",
+  "main": "main.js",
+  "author": "Antigravity",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^28.2.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.antigravity.editor",
+    "productName": "AntigravityVideoEditor",
+    "copyright": "Copyright © 2026 Antigravity",
+    "win": {
+      "target": "nsis",
+      "icon": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "files": [
+      "index.html",
+      "main.js",
+      "package.json"
+    ]
+  }
+}
