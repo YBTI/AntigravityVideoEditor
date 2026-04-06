@@ -139,11 +139,17 @@
           <label>Audio Gain (%)</label>
           <input type="number" id="prop-gain" step="1" min="-100" max="100">
         </div>
+        <div class="prop-group" style="display:flex; align-items:center; gap:10px;">
+          <input type="checkbox" id="prop-mute" style="width:auto;">
+          <label style="margin:0;">Mute</label>
+        </div>
       </div>
     </div>
   </div>
 
   <div id="context-menu" class="hidden">
+    <div class="context-menu-item" id="cm-separate">Separate Audio</div>
+    <div class="context-menu-divider"></div>
     <div class="context-menu-item" id="cm-gain">Audio Gain...</div>
     <div class="context-menu-divider"></div>
     <div class="context-menu-item" id="cm-delete">Delete Clip</div>
@@ -313,7 +319,7 @@
       let finalStartTime = startTime;
       track.clips.forEach(c => { if (Math.abs(c.end - startTime) < SNAP_THRESHOLD) finalStartTime = c.end; });
 
-      const clip = { id: 'clip-' + Date.now(), assetId: assetId, start: finalStartTime, end: finalStartTime + asset.duration, trimStart: 0, fadeIn: 0, fadeOut: 0, gain: 0, fileName: asset.name };
+      const clip = { id: 'clip-' + Date.now(), assetId: assetId, start: finalStartTime, end: finalStartTime + asset.duration, trimStart: 0, fadeIn: 0, fadeOut: 0, gain: 0, muted: false, fileName: asset.name };
       track.clips.push(clip);
       state.selectedClipId = clip.id;
       state.selectedTrackId = track.id;
@@ -432,8 +438,9 @@
       const track = scene.tracks.find(t => t.id === state.selectedTrackId);
       const clip = track ? track.clips.find(c => c.id === state.selectedClipId) : null;
       const cp = document.getElementById('clip-props'); const msg = document.getElementById('no-clip-msg');
-      if (clip) { cp.classList.remove('hidden'); msg.classList.add('hidden'); document.getElementById('prop-fade-in').value = clip.fadeIn; document.getElementById('prop-fade-out').value = clip.fadeOut; document.getElementById('prop-gain').value = clip.gain; } else { cp.classList.add('hidden'); msg.classList.remove('hidden'); }
+      if (clip) { cp.classList.remove('hidden'); msg.classList.add('hidden'); document.getElementById('prop-fade-in').value = clip.fadeIn; document.getElementById('prop-fade-out').value = clip.fadeOut; document.getElementById('prop-gain').value = clip.gain; document.getElementById('prop-mute').checked = !!clip.muted; } else { cp.classList.add('hidden'); msg.classList.remove('hidden'); }
     }
+    document.getElementById('prop-mute').onchange = (e) => { const scene = getCurrentScene(); const t = scene.tracks.find(t => t.id === state.selectedTrackId); const c = t ? t.clips.find(c => c.id === state.selectedClipId) : null; if (c) c.muted = e.target.checked; renderPreview(); };
     document.getElementById('prop-fade-in').oninput = (e) => { const scene = getCurrentScene(); const t = scene.tracks.find(t => t.id === state.selectedTrackId); const c = t ? t.clips.find(c => c.id === state.selectedClipId) : null; if (c) c.fadeIn = parseFloat(e.target.value) || 0; renderPreview(); };
     document.getElementById('prop-fade-out').oninput = (e) => { const scene = getCurrentScene(); const t = scene.tracks.find(t => t.id === state.selectedTrackId); const c = t ? t.clips.find(c => c.id === state.selectedClipId) : null; if (c) c.fadeOut = parseFloat(e.target.value) || 0; renderPreview(); };
     document.getElementById('prop-gain').oninput = (e) => { const scene = getCurrentScene(); const t = scene.tracks.find(t => t.id === state.selectedTrackId); const c = t ? t.clips.find(c => c.id === state.selectedClipId) : null; if (c) c.gain = parseFloat(e.target.value) || 0; renderPreview(); };
@@ -455,40 +462,73 @@
     }
     btnPlay.addEventListener('click', togglePlay);
 
+    function getMediaElement(clip, asset) {
+      if (clip.element) return clip.element;
+      // If asset is already in use by another clip in this frame, we might need a clone.
+      // For simplicity, always use asset.element for video track, but allow audio tracks to clone for independence.
+      const scene = getCurrentScene();
+      const otherClips = scene.tracks.flatMap(t => t.clips).filter(c => c.id !== clip.id && c.assetId === clip.assetId);
+      const isOverlapping = otherClips.some(c => scene.currentTime >= c.start && scene.currentTime < c.end);
+      
+      if (isOverlapping) {
+        if (!clip._tempElement) {
+          clip._tempElement = document.createElement(asset.type);
+          clip._tempElement.src = asset.element.src;
+          clip._tempElement.preload = 'auto';
+        }
+        return clip._tempElement;
+      }
+      return asset.element;
+    }
+
     function renderPreview() {
       const scene = getCurrentScene();
       ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Stop all asset elements initially to avoid ghost sounds
+      Object.values(state.assets).forEach(a => { if (!state.isPlaying && !a.element.paused) a.element.pause(); });
+
       scene.tracks.filter(t => t.type === 'video').forEach(track => {
         if (!track.visible) return;
         const clip = track.clips.find(c => scene.currentTime >= c.start && scene.currentTime < c.end);
         if (clip) {
           const asset = state.assets[clip.assetId];
           if (asset) {
+            const el = asset.element; // Video always uses the primary element
             const localTime = clip.trimStart + (scene.currentTime - clip.start);
-            if (Math.abs(asset.element.currentTime - localTime) > 0.15) asset.element.currentTime = localTime;
-            if (state.isPlaying && asset.element.paused) asset.element.play();
+            if (Math.abs(el.currentTime - localTime) > 0.15) el.currentTime = localTime;
+            if (state.isPlaying && el.paused) el.play();
+            
+            // Handle audio for video track
+            let vol = (clip.muted || track.muted) ? 0 : 1.0;
+            const gainFactor = 1 + (clip.gain / 100);
+            el.volume = Math.max(0, Math.min(1, vol * gainFactor));
+
             let alpha = 1.0; const elapsed = scene.currentTime - clip.start; const remaining = clip.end - scene.currentTime;
             if (clip.fadeIn > 0 && elapsed < clip.fadeIn) alpha = elapsed / clip.fadeIn; else if (clip.fadeOut > 0 && remaining < clip.fadeOut) alpha = remaining / clip.fadeOut;
             ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-            const ratio = Math.min(canvas.width / asset.element.videoWidth, canvas.height / asset.element.videoHeight);
-            const cw = asset.element.videoWidth * ratio; const ch = asset.element.videoHeight * ratio;
-            ctx.drawImage(asset.element, (canvas.width - cw) / 2, (canvas.height - ch) / 2, cw, ch);
+            const ratio = Math.min(canvas.width / el.videoWidth, canvas.height / el.videoHeight);
+            const cw = el.videoWidth * ratio; const ch = el.videoHeight * ratio;
+            ctx.drawImage(el, (canvas.width - cw) / 2, (canvas.height - ch) / 2, cw, ch);
             ctx.globalAlpha = 1.0;
           }
         }
       });
+
       scene.tracks.filter(t => t.type === 'audio').forEach(track => {
         const clip = track.clips.find(c => scene.currentTime >= c.start && scene.currentTime < c.end);
         const asset = clip ? state.assets[clip.assetId] : null;
         if (asset) {
+          const el = getMediaElement(clip, asset);
           const localTime = clip.trimStart + (scene.currentTime - clip.start);
-          if (Math.abs(asset.element.currentTime - localTime) > 0.15) asset.element.currentTime = localTime;
-          if (state.isPlaying && !track.muted && asset.element.paused) asset.element.play();
-          if (track.muted && !asset.element.paused) asset.element.pause();
+          if (Math.abs(el.currentTime - localTime) > 0.15) el.currentTime = localTime;
+          if (state.isPlaying && !(track.muted || clip.muted) && el.paused) el.play().catch(()=>{});
+          if ((track.muted || clip.muted) && !el.paused) el.pause();
+          
           let vol = 1.0; const elapsed = scene.currentTime - clip.start; const remaining = clip.end - scene.currentTime;
           if (clip.fadeIn > 0 && elapsed < clip.fadeIn) vol = elapsed / clip.fadeIn; else if (clip.fadeOut > 0 && remaining < clip.fadeOut) vol = remaining / clip.fadeOut;
           const gainFactor = 1 + (clip.gain / 100);
-          asset.element.volume = Math.max(0, Math.min(1, vol * gainFactor));
+          el.volume = Math.max(0, Math.min(1, vol * gainFactor));
         }
       });
       if (extWin && !extWin.closed) { const ext = extWin.document.getElementById('ext-canvas'); if (ext) ext.getContext('2d').drawImage(canvas, 0, 0); }
@@ -640,6 +680,11 @@
     function showContextMenu(x, y, clip) {
       contextMenu.style.left = x + 'px'; contextMenu.style.top = y + 'px';
       contextMenu.classList.remove('hidden');
+      
+      const isVideo = state.assets[clip.assetId]?.type === 'video';
+      document.getElementById('cm-separate').classList.toggle('hidden', !isVideo);
+      document.getElementById('cm-separate').onclick = () => { separateAudio(clip.id); hideContextMenu(); };
+
       document.getElementById('cm-gain').onclick = () => {
         const val = prompt('Enter Audio Gain (-100 to 100):', clip.gain);
         if (val !== null) { clip.gain = parseFloat(val) || 0; updatePropertyPanel(); renderPreview(); }
@@ -654,6 +699,33 @@
     }
     function hideContextMenu() { contextMenu.classList.add('hidden'); }
     document.addEventListener('click', () => hideContextMenu());
+
+    function separateAudio(clipId) {
+      const scene = getCurrentScene();
+      const track = scene.tracks.find(t => t.id === state.selectedTrackId);
+      const clip = track ? track.clips.find(c => c.id === clipId) : null;
+      if (!clip) return;
+
+      // 1. Mute the video clip
+      clip.muted = true;
+      
+      // 2. Find or create an audio track
+      let audioTrack = scene.tracks.find(t => t.type === 'audio');
+      if (!audioTrack) { addTrack('audio'); audioTrack = scene.tracks.find(t => t.type === 'audio'); }
+
+      // 3. Clone the clip to audio track
+      const audioClip = { 
+        ...JSON.parse(JSON.stringify(clip)), 
+        id: 'clip-a-' + Date.now(), 
+        muted: false,
+        _tempElement: null // Force clean for clone detection
+      };
+      audioTrack.clips.push(audioClip);
+
+      renderTimeline();
+      updatePropertyPanel();
+      renderPreview();
+    }
 
     // --- Input Handling (Keydown) ---
     document.addEventListener('keydown', (e) => {
