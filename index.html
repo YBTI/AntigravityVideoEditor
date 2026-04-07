@@ -219,7 +219,15 @@
     
     let lastTime = 0;
     let interaction = null;
-    let extWin = null;
+    let extWindowOpen = false;
+
+    // Handle external window status from main process
+    if (window.electron) {
+      window.electron.on('external-window-closed', () => {
+        extWindowOpen = false;
+        console.log("External window closed");
+      });
+    }
 
     // Helper: Access Active Scene
     function getCurrentScene() {
@@ -447,12 +455,15 @@
 
     // --- Preview Loop ---
     function loop(timestamp) {
+      const scene = getCurrentScene();
       if (state.isPlaying) {
         const delta = (timestamp - lastTime) / 1000;
-        const scene = getCurrentScene();
         scene.currentTime += delta;
         if (scene.currentTime > scene.duration) { scene.currentTime = 0; togglePlay(); }
         updateUI(); renderPreview();
+      } else if (interaction || extWindowOpen) {
+        // 再生中でなくても、シーク中や外部送信時はレンダリングを継続して同期を保つ
+        renderPreview();
       }
       lastTime = timestamp; requestAnimationFrame(loop);
     }
@@ -531,7 +542,10 @@
           el.volume = Math.max(0, Math.min(1, vol * gainFactor));
         }
       });
-      if (extWin && !extWin.closed) { const ext = extWin.document.getElementById('ext-canvas'); if (ext) ext.getContext('2d').drawImage(canvas, 0, 0); }
+      if (extWindowOpen && window.electron) {
+        // Send frame to external window via main process
+        window.electron.send('render-frame', canvas.toDataURL('image/webp', 0.7)); // Faster compression
+      }
     }
 
     // --- Interaction ---
@@ -763,9 +777,12 @@
     }, { passive: false });
 
     btnExt.onclick = () => {
-      extWin = window.open('', 'ExtPreview', 'width=1280,height=720');
-      extWin.document.write('<html><body style="margin:0;background:#000;display:flex;justify-content:center;align-items:center;"><canvas id="ext-canvas" width="1280" height="720" style="max-width:100%;max-height:100%"></canvas></body></html>');
-      extWin.document.close();
+      if (window.electron) {
+        extWindowOpen = true;
+        window.electron.send('open-external-window');
+      } else {
+        alert("Electron環境、またはIPC通信の初期化に失敗しました。");
+      }
     };
 
     function updateUI() {
