@@ -27,6 +27,8 @@
     "files": [
       "index.html",
       "main.js",
+      "preload.js",
+      "external.html",
       "package.json"
     ]
   }

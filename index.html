@@ -781,7 +781,7 @@
         extWindowOpen = true;
         window.electron.send('open-external-window');
       } else {
-        alert("Electron環境、またはIPC通信の初期化に失敗しました。");
+        alert("Electron環境、またはIPC通信の初期化に失敗しました。\n\n・Electron環境で起動しているか確認してください。\n・preload.js が正しく読み込まれているか確認してください。\n・ビルド版の場合は package.json の files に必要なファイルが含まれているか確認してください。");
       }
     };
 
